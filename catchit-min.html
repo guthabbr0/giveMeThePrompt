@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Fetch once</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+    body { margin: 16px; }
+    .err { color: #c00; font-weight: 700; white-space: pre-wrap; }
+    pre { overflow: auto; background: #1113; padding: .75rem; border-radius: .5rem; }
+  </style>
+</head>
+<body>
+<script>
+(async () => {
+  const params = new URLSearchParams(location.search);
+  const target = params.get('u') || params.get('origin'); // allow both u= or origin=
+  const proxyBase = params.get('proxy') || '';
+  const jsonPath = params.get('jsonpath') || ''; // e.g. props.pageProps.data.mainQuery
+  const raw = params.get('raw') === '1';         // force raw passthrough
+
+  if (!target) return fail("Missing ?u=<url> parameter.");
+
+  try {
+    let resp = await tryFetch(target);
+    if (!resp || !resp.ok || resp.type === 'opaque') {
+      if (!proxyBase) throw new Error('Direct fetch blocked (likely CORS) and no ?proxy= provided.');
+      resp = await tryFetch(makeProxyUrl(proxyBase, target));
+    }
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+
+    const ctype = (resp.headers.get('content-type') || '').toLowerCase();
+    const text = await resp.text();
+
+    // If asked to show a JSON path from Next.js __NEXT_DATA__, do that
+    if (jsonPath) {
+      const data = extractNextData(text);
+      const value = getByPath(data, jsonPath);
+      renderPre(JSON.stringify(value, null, 2));
+      return;
+    }
+
+    // Otherwise, write raw upstream HTML (or any text) into the document
+    if (raw || ctype.includes('text/html')) {
+      const withBase = injectBase(text, target);
+      document.open();
+      document.write(withBase);
+      document.close();
+    } else {
+      // Not HTML; show as preformatted text (JSON/text)
+      renderPre(text);
+    }
+  } catch (e) {
+    fail(e.message || String(e));
+  }
+
+  function makeProxyUrl(base, url) {
+    const sep = base.includes('?') ? '&' : '?';
+    return base + sep + 'url=' + encodeURIComponent(url);
+  }
+
+  async function tryFetch(url) {
+    try {
+      return await fetch(url, { method: 'GET', redirect: 'follow' });
+    } catch { return null; }
+  }
+
+  function extractNextData(html) {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const el = doc.getElementById('__NEXT_DATA__');
+    if (!el || !el.textContent) throw new Error('__NEXT_DATA__ not found in HTML');
+    try { return JSON.parse(el.textContent); } catch (e) { throw new Error('Failed to parse __NEXT_DATA__: ' + e.message); }
+  }
+
+  function getByPath(obj, path) {
+    return path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), obj);
+  }
+
+  function injectBase(html, href) {
+    try {
+      const u = new URL(href);
+      const base = `<base href="${u.origin}${u.pathname.replace(/[^/]*$/, '')}">`;
+      if (/<head[\s>]/i.test(html)) {
+        return html.replace(/<head(\s[^>]*)?>/i, (m) => m + base);
+      }
+      // No head; add one
+      return `<!doctype html><html><head>${base}</head><body>` + html + `</body></html>`;
+    } catch {
+      return html;
+    }
+  }
+
+  function renderPre(s) {
+    document.body.innerHTML = '';
+    const pre = document.createElement('pre');
+    pre.textContent = s;
+    document.body.appendChild(pre);
+  }
+
+  function fail(msg) {
+    document.body.innerHTML = `<div class="err">${escapeHtml(msg)}</div>`;
+  }
+
+  function escapeHtml(s) {
+    return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+})();
+</script>
+</body>
+</html>
