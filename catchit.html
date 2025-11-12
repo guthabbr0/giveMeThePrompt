@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Fetch & Display JSON Item</title>
+<title>Fetch & Display JSON</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
 :root { color-scheme: light dark; font-family: system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
@@ -17,11 +17,12 @@ button { padding: .6rem 1rem; font-weight: 600; cursor: pointer; }
 .loading { animation: pulse 1s linear infinite alternate; }
 @keyframes pulse { from { opacity:.4 } to { opacity:1 } }
 .small { font-size:.75rem; }
+.notice { font-size:.85rem; opacity:.8; }
 </style>
 </head>
 <body>
 <h1>Fetch & Display JSON</h1>
-<p>Provide a target URL (origin param) and optionally a JSON key (key param). This page runs entirely client-side.</p>
+<p>Reads ?origin=… and optionally falls back through ?proxy=… if the origin blocks CORS. Everything runs client-side.</p>
 
 <form id="fetchForm">
   <label for="origin">Origin URL (?origin=...)</label>
@@ -31,7 +32,7 @@ button { padding: .6rem 1rem; font-weight: 600; cursor: pointer; }
   <input type="text" id="key" name="key" placeholder="topLevelProperty">
 
   <details>
-    <summary>Advanced (method, body, headers)</summary>
+    <summary>Advanced (method, body, headers, proxy, selector)</summary>
     <label for="method">HTTP Method (?method=GET/POST)</label>
     <input type="text" id="method" name="method" placeholder="GET">
 
@@ -40,6 +41,15 @@ button { padding: .6rem 1rem; font-weight: 600; cursor: pointer; }
 
     <label for="headers">Headers (?headers=Header1:Value1,Header2:Value2)</label>
     <input type="text" id="headers" name="headers" placeholder="Content-Type:application/json,X-Api-Key:123">
+
+    <label for="proxy">Proxy base (?proxy=http://host:8000/proxy)</label>
+    <input type="text" id="proxy" name="proxy" placeholder="http://127.0.0.1:8000/proxy">
+
+    <label for="selector">HTML selector (optional, ?selector=...)</label>
+    <input type="text" id="selector" name="selector" placeholder="#someId or meta[name=foo]">
+
+    <label for="attr">HTML attribute to show (optional, ?attr=...)</label>
+    <input type="text" id="attr" name="attr" placeholder="content">
   </details>
 
   <button type="submit">Fetch</button>
@@ -47,26 +57,22 @@ button { padding: .6rem 1rem; font-weight: 600; cursor: pointer; }
 
 <div id="status" class="status"></div>
 <div id="output"></div>
+<p class="notice">Note: Direct cross-origin fetches require the target to send appropriate CORS headers. If blocked, this page will try your provided proxy.</p>
 
 <script>
 (function init() {
   const params = new URLSearchParams(location.search);
-  const $origin = document.getElementById('origin');
-  const $key    = document.getElementById('key');
-  const $method = document.getElementById('method');
-  const $body   = document.getElementById('body');
-  const $headers= document.getElementById('headers');
+  const $origin = byId('origin'), $key = byId('key'), $method = byId('method');
+  const $body = byId('body'), $headers = byId('headers'), $proxy = byId('proxy');
+  const $selector = byId('selector'), $attr = byId('attr');
 
-  if (params.get('origin')) $origin.value = params.get('origin');
-  if (params.get('key')) $key.value = params.get('key');
-  if (params.get('method')) $method.value = params.get('method');
-  if (params.get('body')) $body.value = params.get('body');
-  if (params.get('headers')) $headers.value = params.get('headers');
+  for (const [k, el] of Object.entries({origin:$origin,key:$key,method:$method,body:$body,headers:$headers,proxy:$proxy,selector:$selector,attr:$attr})) {
+    if (params.has(k)) el.value = params.get(k);
+  }
 
   if ($origin.value) fetchData();
-  document.getElementById('fetchForm').addEventListener('submit', e => {
-    e.preventDefault();
-    fetchData();
+  byId('fetchForm').addEventListener('submit', e => {
+    e.preventDefault(); fetchData();
   });
 
   async function fetchData() {
@@ -77,92 +83,160 @@ button { padding: .6rem 1rem; font-weight: 600; cursor: pointer; }
     const method = ($method.value.trim() || 'GET').toUpperCase();
     let body = $body.value.trim();
     const headers = parseHeaders($headers.value.trim());
+    const proxyBase = $proxy.value.trim();
+    const selector = $selector.value.trim();
+    const attr = $attr.value.trim();
 
-    const statusEl = document.getElementById('status');
-    statusEl.textContent = 'Fetching…';
-    statusEl.classList.add('loading');
+    setStatus('Fetching…', true);
 
-    let options = { method, headers };
-    if (method !== 'GET' && body) {
-      // Auto-detect JSON body
-      if (looksLikeJSON(body)) {
-        headers['Content-Type'] = headers['Content-Type'] || 'application/json';
-        options.body = body;
+    const options = buildInit(method, body, headers);
+    let resp, via = 'direct';
+    try {
+      resp = await fetch(origin, options);
+      // If opaque (no-cors), you cannot read it; treat as CORS failure.
+      if (resp.type === 'opaque') throw new Error('Opaque response (likely no-cors/CORS-blocked)');
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    } catch (e) {
+      if (proxyBase) {
+        try {
+          const proxied = makeProxyUrl(proxyBase, origin);
+          resp = await fetch(proxied, options);
+          via = 'proxy';
+        } catch (e2) {
+          setStatus('', false);
+          return showError('Fetch failed (direct and via proxy): ' + e2.message);
+        }
       } else {
-        headers['Content-Type'] = headers['Content-Type'] || 'application/x-www-form-urlencoded';
-        options.body = body;
+        setStatus('', false);
+        return showError('Fetch failed (likely CORS). Add ?proxy=http://host:port/proxy to auto-fallback.');
       }
     }
 
     try {
-      const resp = await fetch(origin, options);
-      statusEl.classList.remove('loading');
-      statusEl.textContent = `HTTP ${resp.status}`;
+      setStatus((via === 'proxy' ? 'HTTP ' + resp.status + ' (via proxy)' : 'HTTP ' + resp.status), false);
+      const ctype = (resp.headers.get('content-type') || '').toLowerCase();
 
-      // CORS hint
-      if (!resp.ok) {
-        showError(`Fetch failed. Status: ${resp.status}`);
-        return;
-      }
+      let data = null, raw = null, htmlDoc = null;
 
-      const ctype = resp.headers.get('content-type') || '';
-      let data, raw;
-      if (ctype.includes('application/json')) {
+      if (ctype.includes('application/json') || ctype.includes('+json')) {
         data = await resp.json();
         raw = JSON.stringify(data, null, 2);
       } else {
         const text = await resp.text();
         raw = text;
-        // Attempt to extract JSON object from text
-        const match = text.match(/\{[\s\S]*\}/);
-        if (match) {
-          try {
-            data = JSON.parse(match[0]);
-          } catch (e) {
-            // fallback: not valid JSON
-          }
-        }
-        if (!data) {
-          showError("Response not JSON or JSON could not be parsed. Showing raw text.");
-        }
+        // Try structured extraction from HTML
+        htmlDoc = toHTML(text);
+        data = tryExtractJSONFromHTML(text, htmlDoc) || tryParseFirstJSONObject(text);
       }
 
-      displayResult(data, raw);
+      displayResult({ data, raw, selector, attr, key: $key.value.trim(), htmlDoc });
     } catch (err) {
-      statusEl.classList.remove('loading');
-      if (err.name === 'TypeError' && /fetch/i.test(err.message)) {
-        showError("Fetch failed (possible CORS block). Browser cannot access this resource directly.");
-      } else {
-        showError(err.message);
-      }
+      showError('Error reading response: ' + err.message);
     }
   }
 
-  function displayResult(data, raw) {
-    const output = document.getElementById('output');
-    const key = document.getElementById('key').value.trim();
+  function buildInit(method, body, headers) {
+    const init = { method, headers };
+    if (method !== 'GET' && method !== 'HEAD' && body) {
+      if (looksLikeJSON(body)) {
+        headers['Content-Type'] = headers['Content-Type'] || 'application/json';
+        init.body = body;
+      } else {
+        headers['Content-Type'] = headers['Content-Type'] || 'application/x-www-form-urlencoded';
+        init.body = body;
+      }
+    }
+    return init;
+  }
+
+  function makeProxyUrl(proxyBase, target) {
+    const hasQ = proxyBase.includes('?');
+    const sep = hasQ ? '&' : '?';
+    return proxyBase + sep + 'url=' + encodeURIComponent(target);
+  }
+
+  function displayResult({ data, raw, selector, attr, key, htmlDoc }) {
+    const out = byId('output');
     let html = '';
 
-    if (data && key) {
-      let val = resolveKey(data, key);
-      if (val === undefined) {
-        html += `<p><strong>Key:</strong> "${escapeHtml(key)}" not found in JSON.</p>`;
+    // Extract from HTML with selector if requested
+    if (htmlDoc && selector) {
+      const node = htmlDoc.querySelector(selector);
+      if (node) {
+        const value = attr ? node.getAttribute(attr) : node.textContent;
+        html += `<p><strong>Selector:</strong> ${escapeHtml(selector)}${attr ? ' @'+escapeHtml(attr) : ''}</p>`;
+        html += `<pre class="code-block">${escapeHtml((value ?? '').toString())}</pre>`;
       } else {
-        html += `<p><strong>Value for "${escapeHtml(key)}":</strong></p><pre class="code-block">${escapeHtml(JSON.stringify(val, null, 2))}</pre>`;
+        html += `<p><strong>Selector:</strong> ${escapeHtml(selector)} not found.</p>`;
       }
     }
 
-    if (data && !key) {
-      html += `<p><strong>Parsed JSON:</strong></p><pre class="code-block">${escapeHtml(JSON.stringify(data, null, 2))}</pre>`;
+    // Show JSON (full or by key)
+    if (data) {
+      if (key) {
+        const val = resolveKey(data, key);
+        if (val === undefined) {
+          html += `<p><strong>Key:</strong> "${escapeHtml(key)}" not found in JSON.</p>`;
+        } else {
+          html += `<p><strong>Value for "${escapeHtml(key)}":</strong></p><pre class="code-block">${escapeHtml(JSON.stringify(val, null, 2))}</pre>`;
+        }
+      } else {
+        html += `<p><strong>Parsed JSON:</strong></p><pre class="code-block">${escapeHtml(JSON.stringify(data, null, 2))}</pre>`;
+      }
     }
 
+    // Always show raw
     html += `<details open><summary>Raw Response</summary><pre class="code-block">${escapeHtml(raw || 'No raw data')}</pre></details>`;
-    output.innerHTML = html;
+    out.innerHTML = html;
+  }
+
+  function tryExtractJSONFromHTML(text, doc) {
+    // Next.js inline assignment
+    const rxNextAssign = /window\.__NEXT_DATA__\s*=\s*({[\s\S]*?});?\s*<\/script>/i;
+    const m = text.match(rxNextAssign);
+    if (m) {
+      try { return JSON.parse(m[1]); } catch {}
+    }
+
+    // Next.js script tag
+    if (doc) {
+      const nextTag = doc.querySelector('script#__NEXT_DATA__');
+      if (nextTag && nextTag.textContent) {
+        try { return JSON.parse(nextTag.textContent); } catch {}
+      }
+      // Any JSON-ish script tags
+      const jsonScripts = doc.querySelectorAll('script[type*="json"]');
+      for (const s of jsonScripts) {
+        if (s.textContent) {
+          try { return JSON.parse(s.textContent); } catch {}
+        }
+      }
+      // LD+JSON specifically
+      const ld = doc.querySelectorAll('script[type="application/ld+json"]');
+      for (const s of ld) {
+        if (s.textContent) {
+          try { return JSON.parse(s.textContent); } catch {}
+        }
+      }
+    }
+    return null;
+  }
+
+  function tryParseFirstJSONObject(text) {
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+    try { return JSON.parse(match[0]); } catch { return null; }
+  }
+
+  function toHTML(text) {
+    try {
+      const p = new DOMParser();
+      return p.parseFromString(text, 'text/html');
+    } catch { return null; }
   }
 
   function resolveKey(obj, keyPath) {
-    // Support dot.notation
-    return keyPath.split('.').reduce((acc, k) => acc && acc[k], obj);
+    return keyPath.split('.').reduce((acc, k) => acc != null ? acc[k] : undefined, obj);
   }
 
   function parseHeaders(str) {
@@ -177,24 +251,22 @@ button { padding: .6rem 1rem; font-weight: 600; cursor: pointer; }
   }
 
   function looksLikeJSON(s) {
-    return s.startsWith('{') && s.endsWith('}') || s.startsWith('[') && s.endsWith(']');
+    return (s.startsWith('{') && s.endsWith('}')) || (s.startsWith('[') && s.endsWith(']'));
   }
 
   function escapeHtml(s) {
-    return s.replace(/[&<>"']/g, c => ({
-      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
-    }[c]));
+    return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   }
-
-  function clearOutput() {
-    document.getElementById('output').innerHTML = '';
-    document.getElementById('status').textContent = '';
+  function setStatus(msg, loading) {
+    const el = byId('status');
+    el.textContent = msg || '';
+    el.classList.toggle('loading', !!loading);
   }
-
+  function clearOutput() { byId('output').innerHTML = ''; setStatus('', false); }
   function showError(msg) {
-    document.getElementById('output').innerHTML =
-      `<div class="error" style="color:#c00;font-weight:600;">${escapeHtml(msg)}</div>`;
+    byId('output').innerHTML = `<div class="error" style="color:#c00;font-weight:600;">${escapeHtml(msg)}</div>`;
   }
+  function byId(id) { return document.getElementById(id); }
 })();
 </script>
 </body>
