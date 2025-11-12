@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Raw string viewer (wrapped, copyable)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+    body { margin: 16px; }
+    .bar { display: flex; gap: .75rem; align-items: center; margin-bottom: .75rem; flex-wrap: wrap; }
+    .btn { padding: .45rem .7rem; font-weight: 600; cursor: pointer; border: 1px solid #8884; border-radius: .4rem; background: #fff1; }
+    .ok { color: #0a0; }
+    .err { color: #c00; white-space: pre-wrap; }
+    #box {
+      border: 1px solid #8884;
+      border-radius: .5rem;
+      padding: .75rem;
+      background: #1113;
+      max-width: 100%;
+      /* Wrapped by default for human eyes */
+      white-space: pre-wrap;     /* preserve newlines; wrap long lines */
+      word-break: break-word;    /* break overly long tokens */
+      overflow-wrap: anywhere;   /* avoid horizontal scroll */
+      margin: 0;
+    }
+    #meta { font-size: .85rem; opacity: .75; margin-top: .5rem; }
+    label { user-select: none; }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <button id="copyBtn" class="btn">Copy</button>
+    <label><input id="wrapChk" type="checkbox" checked> Wrap long lines</label>
+    <span id="msg"></span>
+  </div>
+  <pre id="box"></pre>
+  <div id="meta"></div>
+
+<script>
+/*
+Query params:
+  u         = URL to fetch (required unless you embed value manually)
+  proxy     = optional proxy base (e.g. https://your-proxy.example/proxy)
+  jsonpath  = dot path inside __NEXT_DATA__ to the string you want
+              e.g. props.pageProps.data.mainQuery.whatever
+  value     = optional: skip fetch and just show this raw JSON string value
+              (URL-encode it). If provided, jsonpath/u/proxy are ignored.
+  nowrap=1  = start with wrapping OFF
+*/
+(async () => {
+  const byId = (id) => document.getElementById(id);
+  const params = new URLSearchParams(location.search);
+  const wrapChk = byId('wrapChk');
+  const copyBtn = byId('copyBtn');
+  const box = byId('box');
+  const msg = byId('msg');
+  const meta = byId('meta');
+
+  if (params.get('nowrap') === '1') wrapChk.checked = false;
+
+  let displayText = '';
+  try {
+    const directValue = params.get('value');
+    if (directValue != null) {
+      // Treat provided value as JSON string value (not the whole JSON)
+      // It might come URL-encoded; we keep it raw as given.
+      displayText = transformForDisplayFromJSONStringValue(directValue);
+      meta.textContent = 'source: ?value (direct)';
+    } else {
+      const target = params.get('u') || params.get('origin');
+      const proxyBase = params.get('proxy') || '';
+      const jsonPath = params.get('jsonpath') || '';
+      if (!target || !jsonPath) throw new Error('Missing ?u= and/or ?jsonpath=');
+
+      let resp = await safeFetch(target);
+      if (!resp || !resp.ok || resp.type === 'opaque') {
+        if (!proxyBase) throw new Error('Direct fetch blocked (likely CORS) and no ?proxy= provided');
+        resp = await safeFetch(makeProxyUrl(proxyBase, target));
+      }
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+
+      const html = await resp.text();
+      const nextData = extractNextData(html);
+      const val = getByPath(nextData, jsonPath);
+
+      if (typeof val !== 'string') {
+        throw new Error('jsonpath did not point to a string. Got: ' + (val === null ? 'null' : typeof val));
+      }
+
+      displayText = transformForDisplayFromJSString(val);
+      meta.textContent = 'source: __NEXT_DATA__ → ' + jsonPath;
+    }
+
+    // Render
+    setWrap(box, wrapChk.checked);
+    box.textContent = displayText;
+    msg.textContent = '';
+  } catch (e) {
+    box.textContent = '';
+    msg.textContent = 'Error: ' + (e && e.message ? e.message : String(e));
+    msg.className = 'err';
+  }
+
+  // Toggle wrapping
+  wrapChk.addEventListener('change', () => {
+    setWrap(box, wrapChk.checked);
+  });
+
+  // Copy to clipboard (exact text as seen, with real newlines, quotes escaped as \")
+  copyBtn.addEventListener('click', async () => {
+    try {
+      await copyText(box.textContent);
+      msg.textContent = 'Copied';
+      msg.className = 'ok';
+      setTimeout(() => { msg.textContent = ''; }, 1200);
+    } catch (e) {
+      msg.textContent = 'Copy failed: ' + e.message;
+      msg.className = 'err';
+    }
+  });
+
+  // Helpers
+
+  function setWrap(el, on) {
+    el.style.whiteSpace = on ? 'pre-wrap' : 'pre';
+    el.style.overflowX = on ? 'hidden' : 'auto';
+  }
+
+  function makeProxyUrl(base, url) {
+    const sep = base.includes('?') ? '&' : '?';
+    return base + sep + 'url=' + encodeURIComponent(url);
+  }
+
+  async function safeFetch(url) {
+    try { return await fetch(url, { method: 'GET', redirect: 'follow' }); }
+    catch { return null; }
+  }
+
+  function extractNextData(html) {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const el = doc.getElementById('__NEXT_DATA__');
+    if (!el || !el.textContent) throw new Error('__NEXT_DATA__ not found');
+    try { return JSON.parse(el.textContent); }
+    catch (e) { throw new Error('Failed to parse __NEXT_DATA__: ' + e.message); }
+  }
+
+  function getByPath(obj, path) {
+    return path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), obj);
+  }
+
+  // CRITICAL TRANSFORMS:
+  // Case A: you already have the JS string value (after JSON.parse of __NEXT_DATA__)
+  // - Keep quotes escaped as \" (so tools expecting JSON-like escapes are happy)
+  // - Convert \n-style escapes into real newlines for human eyes
+  function transformForDisplayFromJSString(jsString) {
+    // JSON.stringify re-escapes as a JSON string literal, including \" and \\n
+    let s = JSON.stringify(jsString);
+    // strip surrounding quotes
+    s = s.slice(1, -1);
+    // turn escaped newlines into real newlines for display/copy
+    s = s.replace(/\\r\\n|\\n|\\r/g, '\n');
+    return s;
+  }
+
+  // Case B: you provide a raw JSON string value via ?value=
+  // Treat it as the content between the outer quotes of a JSON string literal.
+  function transformForDisplayFromJSONStringValue(raw) {
+    // If someone pasted including outer quotes, strip them
+    if (raw.length >= 2 && raw[0] === '"' && raw[raw.length - 1] === '"') {
+      raw = raw.slice(1, -1);
+    }
+    return raw.replace(/\\r\\n|\\n|\\r/g, '\n');
+  }
+
+  async function copyText(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text);
+    }
+    // Fallback
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.left = '-1000px';
+    ta.style.top = '0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+  }
+})();
+</script>
+</body>
+</html>
