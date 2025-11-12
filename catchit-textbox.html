@@ -30,6 +30,14 @@
 <body>
   <div class="bar">
     <button id="copyBtn" class="btn">Copy</button>
+    <button data-component="IconButton" type="button" data-testid="copy-raw-button" data-hotkey="control+c" data-loading="false" data-no-visuals="true" data-size="small" data-variant="default">
+      <svg aria-hidden="true" focusable="false" class="octicon octicon-copy" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align: text-bottom;">
+      <path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z">
+      </path>
+      <path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z">
+        </path>
+    </svg>
+    </button>
     <label><input id="wrapChk" type="checkbox" checked> Wrap long lines</label>
     <span id="msg"></span>
   </div>
@@ -132,7 +140,7 @@ Query params:
   }
 
   async function safeFetch(url) {
-    try { return await fetch(url, { method: 'GET', redirect: 'follow' }); }
+    try { return await fetch(url, { method: 'GET' }); }
     catch { return null; }
   }
 
@@ -148,9 +156,6 @@ Query params:
     return path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), obj);
   }
 
-  // CRITICAL TRANSFORMS:
-  // Case A: you already have the JS string value (after JSON.parse of __NEXT_DATA__)
-  // - Keep quotes escaped as \" (so tools expecting JSON-like escapes are happy)
   // - Convert \n-style escapes into real newlines for human eyes
   function transformForDisplayFromJSString(jsString) {
     // JSON.stringify re-escapes as a JSON string literal, including \" and \\n
@@ -160,16 +165,6 @@ Query params:
     // turn escaped newlines into real newlines for display/copy
     s = s.replace(/\\r\\n|\\n|\\r/g, '\n');
     return s;
-  }
-
-  // Case B: you provide a raw JSON string value via ?value=
-  // Treat it as the content between the outer quotes of a JSON string literal.
-  function transformForDisplayFromJSONStringValue(raw) {
-    // If someone pasted including outer quotes, strip them
-    if (raw.length >= 2 && raw[0] === '"' && raw[raw.length - 1] === '"') {
-      raw = raw.slice(1, -1);
-    }
-    return raw.replace(/\\r\\n|\\n|\\r/g, '\n');
   }
 
   async function copyText(text) {
