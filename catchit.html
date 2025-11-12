@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CatchIt - JSON Fetcher</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 900px;
+            width: 100%;
+            padding: 40px;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+
+        .url-display {
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            word-break: break-all;
+            font-size: 14px;
+            color: #666;
+        }
+
+        .url-display strong {
+            color: #333;
+        }
+
+        .status {
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+
+        .status.loading {
+            background: #e3f2fd;
+            color: #1976d2;
+            border: 1px solid #90caf9;
+        }
+
+        .status.success {
+            background: #e8f5e9;
+            color: #2e7d32;
+            border: 1px solid #81c784;
+        }
+
+        .status.error {
+            background: #ffebee;
+            color: #c62828;
+            border: 1px solid #e57373;
+        }
+
+        .json-display {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 20px;
+            border-radius: 8px;
+            overflow-x: auto;
+            max-height: 600px;
+            overflow-y: auto;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+
+        .json-display pre {
+            margin: 0;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .error-details {
+            margin-top: 10px;
+            padding: 10px;
+            background: #fff;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+
+        .retry-button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-top: 10px;
+            transition: background 0.3s;
+        }
+
+        .retry-button:hover {
+            background: #5568d3;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎯 CatchIt - JSON Fetcher</h1>
+        
+        <div class="url-display" id="urlDisplay">
+            <strong>Target URL:</strong> <span id="targetUrl">Detecting...</span>
+        </div>
+
+        <div class="status loading" id="status">
+            <span id="statusText">Initializing...</span>
+        </div>
+
+        <div class="json-display hidden" id="jsonDisplay">
+            <pre id="jsonContent"></pre>
+        </div>
+    </div>
+
+    <script>
+        // Get URL from query parameter or document referrer
+        function getTargetUrl() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const originParam = urlParams.get('origin');
+            
+            if (originParam) {
+                return originParam;
+            }
+            
+            if (document.referrer) {
+                return document.referrer;
+            }
+            
+            return null;
+        }
+
+        // Update status message
+        function updateStatus(type, message) {
+            const statusEl = document.getElementById('status');
+            const statusTextEl = document.getElementById('statusText');
+            
+            statusEl.className = 'status ' + type;
+            statusTextEl.textContent = message;
+        }
+
+        // Display JSON in a formatted way
+        function displayJson(data) {
+            const jsonDisplayEl = document.getElementById('jsonDisplay');
+            const jsonContentEl = document.getElementById('jsonContent');
+            
+            try {
+                const formattedJson = JSON.stringify(data, null, 2);
+                jsonContentEl.textContent = formattedJson;
+                jsonDisplayEl.classList.remove('hidden');
+            } catch (error) {
+                jsonContentEl.textContent = 'Error formatting JSON: ' + error.message;
+                jsonDisplayEl.classList.remove('hidden');
+            }
+        }
+
+        // Display error message
+        function displayError(message, details) {
+            const statusEl = document.getElementById('status');
+            const statusTextEl = document.getElementById('statusText');
+            
+            statusEl.className = 'status error';
+            
+            let errorHtml = message;
+            if (details) {
+                errorHtml += '<div class="error-details">' + details + '</div>';
+            }
+            
+            statusTextEl.innerHTML = errorHtml;
+        }
+
+        // Fetch and display JSON
+        async function fetchAndDisplay(url) {
+            updateStatus('loading', '⏳ Fetching data from URL...');
+            
+            try {
+                const response = await fetch(url, {
+                    method: 'GET',
+                    headers: {
+                        'Accept': 'application/json'
+                    }
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const contentType = response.headers.get('content-type');
+                if (!contentType || !contentType.includes('application/json')) {
+                    // Try to parse as JSON anyway
+                    const text = await response.text();
+                    try {
+                        const data = JSON.parse(text);
+                        updateStatus('success', '✅ Data fetched successfully!');
+                        displayJson(data);
+                    } catch (e) {
+                        throw new Error('Response is not valid JSON. Content-Type: ' + (contentType || 'not specified'));
+                    }
+                } else {
+                    const data = await response.json();
+                    updateStatus('success', '✅ Data fetched successfully!');
+                    displayJson(data);
+                }
+            } catch (error) {
+                let errorMessage = '❌ Failed to fetch data';
+                let errorDetails = '';
+                
+                if (error.name === 'TypeError' && error.message.includes('Failed to fetch')) {
+                    errorDetails = '<strong>CORS Error:</strong> The server at the target URL does not allow cross-origin requests from this page. ' +
+                                 'The server must set appropriate CORS headers (Access-Control-Allow-Origin) for this to work in the browser.';
+                } else {
+                    errorDetails = '<strong>Error:</strong> ' + error.message;
+                }
+                
+                displayError(errorMessage, errorDetails);
+            }
+        }
+
+        // Main execution
+        window.addEventListener('DOMContentLoaded', () => {
+            const targetUrl = getTargetUrl();
+            const targetUrlEl = document.getElementById('targetUrl');
+            
+            if (!targetUrl) {
+                targetUrlEl.textContent = 'None provided';
+                displayError(
+                    '❌ No URL provided',
+                    'Please provide a URL via the <strong>origin</strong> query parameter, e.g., <code>catchit.html?origin=https://example.com/api</code>'
+                );
+                return;
+            }
+            
+            targetUrlEl.textContent = targetUrl;
+            fetchAndDisplay(targetUrl);
+        });
+    </script>
+</body>
+</html>
