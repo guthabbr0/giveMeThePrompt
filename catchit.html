@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Fetch & Display JSON Item</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root { color-scheme: light dark; font-family: system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+body { margin: 1.25rem; max-width: 900px; }
+h1 { font-size: 1.25rem; margin-bottom: .75rem; }
+form, .result, .error, pre { margin-top: 1rem; }
+label { display: block; margin: .5rem 0 .25rem; font-weight: 600; }
+input[type=text], textarea { width: 100%; padding: .5rem; font-family: inherit; }
+button { padding: .6rem 1rem; font-weight: 600; cursor: pointer; }
+.code-block { background: #1113; padding: .75rem; border-radius: .5rem; overflow:auto; }
+.status { font-size: .8rem; opacity: .7; }
+.loading { animation: pulse 1s linear infinite alternate; }
+@keyframes pulse { from { opacity:.4 } to { opacity:1 } }
+.small { font-size:.75rem; }
+</style>
+</head>
+<body>
+<h1>Fetch & Display JSON</h1>
+<p>Provide a target URL (origin param) and optionally a JSON key (key param). This page runs entirely client-side.</p>
+
+<form id="fetchForm">
+  <label for="origin">Origin URL (?origin=...)</label>
+  <input type="text" id="origin" name="origin" placeholder="https://poe.com/GiveQuinnMoney">
+
+  <label for="key">JSON Key to display (optional, ?key=...)</label>
+  <input type="text" id="key" name="key" placeholder="topLevelProperty">
+
+  <details>
+    <summary>Advanced (method, body, headers)</summary>
+    <label for="method">HTTP Method (?method=GET/POST)</label>
+    <input type="text" id="method" name="method" placeholder="GET">
+
+    <label for="body">Body (?body=...)</label>
+    <textarea id="body" name="body" rows="3" placeholder='{"example":"value"}'></textarea>
+
+    <label for="headers">Headers (?headers=Header1:Value1,Header2:Value2)</label>
+    <input type="text" id="headers" name="headers" placeholder="Content-Type:application/json,X-Api-Key:123">
+  </details>
+
+  <button type="submit">Fetch</button>
+</form>
+
+<div id="status" class="status"></div>
+<div id="output"></div>
+
+<script>
+(function init() {
+  const params = new URLSearchParams(location.search);
+  const $origin = document.getElementById('origin');
+  const $key    = document.getElementById('key');
+  const $method = document.getElementById('method');
+  const $body   = document.getElementById('body');
+  const $headers= document.getElementById('headers');
+
+  if (params.get('origin')) $origin.value = params.get('origin');
+  if (params.get('key')) $key.value = params.get('key');
+  if (params.get('method')) $method.value = params.get('method');
+  if (params.get('body')) $body.value = params.get('body');
+  if (params.get('headers')) $headers.value = params.get('headers');
+
+  if ($origin.value) fetchData();
+  document.getElementById('fetchForm').addEventListener('submit', e => {
+    e.preventDefault();
+    fetchData();
+  });
+
+  async function fetchData() {
+    clearOutput();
+    const origin = $origin.value.trim();
+    if (!origin) return showError("No origin URL provided.");
+
+    const method = ($method.value.trim() || 'GET').toUpperCase();
+    let body = $body.value.trim();
+    const headers = parseHeaders($headers.value.trim());
+
+    const statusEl = document.getElementById('status');
+    statusEl.textContent = 'Fetching…';
+    statusEl.classList.add('loading');
+
+    let options = { method, headers };
+    if (method !== 'GET' && body) {
+      // Auto-detect JSON body
+      if (looksLikeJSON(body)) {
+        headers['Content-Type'] = headers['Content-Type'] || 'application/json';
+        options.body = body;
+      } else {
+        headers['Content-Type'] = headers['Content-Type'] || 'application/x-www-form-urlencoded';
+        options.body = body;
+      }
+    }
+
+    try {
+      const resp = await fetch(origin, options);
+      statusEl.classList.remove('loading');
+      statusEl.textContent = `HTTP ${resp.status}`;
+
+      // CORS hint
+      if (!resp.ok) {
+        showError(`Fetch failed. Status: ${resp.status}`);
+        return;
+      }
+
+      const ctype = resp.headers.get('content-type') || '';
+      let data, raw;
+      if (ctype.includes('application/json')) {
+        data = await resp.json();
+        raw = JSON.stringify(data, null, 2);
+      } else {
+        const text = await resp.text();
+        raw = text;
+        // Attempt to extract JSON object from text
+        const match = text.match(/\{[\s\S]*\}/);
+        if (match) {
+          try {
+            data = JSON.parse(match[0]);
+          } catch (e) {
+            // fallback: not valid JSON
+          }
+        }
+        if (!data) {
+          showError("Response not JSON or JSON could not be parsed. Showing raw text.");
+        }
+      }
+
+      displayResult(data, raw);
+    } catch (err) {
+      statusEl.classList.remove('loading');
+      if (err.name === 'TypeError' && /fetch/i.test(err.message)) {
+        showError("Fetch failed (possible CORS block). Browser cannot access this resource directly.");
+      } else {
+        showError(err.message);
+      }
+    }
+  }
+
+  function displayResult(data, raw) {
+    const output = document.getElementById('output');
+    const key = document.getElementById('key').value.trim();
+    let html = '';
+
+    if (data && key) {
+      let val = resolveKey(data, key);
+      if (val === undefined) {
+        html += `<p><strong>Key:</strong> "${escapeHtml(key)}" not found in JSON.</p>`;
+      } else {
+        html += `<p><strong>Value for "${escapeHtml(key)}":</strong></p><pre class="code-block">${escapeHtml(JSON.stringify(val, null, 2))}</pre>`;
+      }
+    }
+
+    if (data && !key) {
+      html += `<p><strong>Parsed JSON:</strong></p><pre class="code-block">${escapeHtml(JSON.stringify(data, null, 2))}</pre>`;
+    }
+
+    html += `<details open><summary>Raw Response</summary><pre class="code-block">${escapeHtml(raw || 'No raw data')}</pre></details>`;
+    output.innerHTML = html;
+  }
+
+  function resolveKey(obj, keyPath) {
+    // Support dot.notation
+    return keyPath.split('.').reduce((acc, k) => acc && acc[k], obj);
+  }
+
+  function parseHeaders(str) {
+    const hdrs = {};
+    if (!str) return hdrs;
+    str.split(',').forEach(pair => {
+      const [k, ...rest] = pair.split(':');
+      if (!k || !rest.length) return;
+      hdrs[k.trim()] = rest.join(':').trim();
+    });
+    return hdrs;
+  }
+
+  function looksLikeJSON(s) {
+    return s.startsWith('{') && s.endsWith('}') || s.startsWith('[') && s.endsWith(']');
+  }
+
+  function escapeHtml(s) {
+    return s.replace(/[&<>"']/g, c => ({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    }[c]));
+  }
+
+  function clearOutput() {
+    document.getElementById('output').innerHTML = '';
+    document.getElementById('status').textContent = '';
+  }
+
+  function showError(msg) {
+    document.getElementById('output').innerHTML =
+      `<div class="error" style="color:#c00;font-weight:600;">${escapeHtml(msg)}</div>`;
+  }
+})();
+</script>
+</body>
+</html>
