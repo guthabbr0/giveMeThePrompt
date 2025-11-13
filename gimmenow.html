@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Raw string viewer (wrapped, copyable)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+    body { margin: 16px; }
+    .bar { display: flex; gap: .75rem; align-items: center; margin-bottom: .75rem; flex-wrap: wrap; }
+    .btn { padding: .45rem .7rem; font-weight: 600; cursor: pointer; border: 1px solid #8884; border-radius: .4rem; background: #fff1; }
+    .ok { color: #0a0; }
+    .err { color: #c00; white-space: pre-wrap; }
+    #box {
+      border: 1px solid #8884;
+      border-radius: .5rem;
+      padding: .75rem;
+      background: #1113;
+      max-width: 100%;
+      /* Wrapped by default for human eyes */
+      white-space: pre-wrap;     /* preserve newlines; wrap long lines */
+      word-break: break-word;    /* break overly long tokens */
+      overflow-wrap: anywhere;   /* avoid horizontal scroll */
+      margin: 0;
+    }
+    #meta { font-size: .85rem; opacity: .75; margin-top: .5rem; }
+    label { user-select: none; }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <!-- <button id="copyBtn" class="btn">Copy</button> -->
+    <button id="copyBtn" type="button" data-size="small" data-hotkey="Control+C" class="btn" tooltip="This is supposed to be the easy modern copy icon, sorry but it's actually cool, good luck seeing this tooltip on a touchscreen thou">
+      <svg aria-hidden="true" focusable="false" class="octicon octicon-copy" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align: text-bottom;">
+      <path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z"></path>
+      <path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"></path>
+    </svg>
+    </button>
+    <label><input id="wrapChk" type="checkbox" checked> Wrap long lines</label>
+    <span id="msg"></span>
+  </div>
+  <pre id="box"></pre>
+  <div id="meta"></div>
+
+<script>
+/*
+Query params:
+  u         = URL to fetch (required unless you embed value manually)
+  jsonpath  = dot path inside __NEXT_DATA__ to the string you want
+              e.g. props.pageProps.data.mainQuery.whatever
+  nowrap=1  = start with wrapping OFF
+*/
+(async () => {
+  const byId = (id) => document.getElementById(id);
+  const params = new URLSearchParams(location.search);
+  const wrapChk = byId('wrapChk');
+  const copyBtn = byId('copyBtn');
+  const box = byId('box');
+  const msg = byId('msg');
+  const meta = byId('meta');
+
+  if (params.get('nowrap') === '1') wrapChk.checked = false;
+
+  let displayText = '';
+  try {
+    const directValue = params.get('value');
+    if (directValue != null) {
+      // Treat provided value as JSON string value (not the whole JSON)
+      // It might come URL-encoded; we keep it raw as given.
+      displayText = transformForDisplayFromJSONStringValue(directValue);
+      meta.textContent = 'source: ?value (direct)';
+    } else {
+      const target = params.get('u') || params.get('origin');
+      const jsonPath = params.get('jsonpath') || 'props.pageProps.data.mainQuery.bot.promptPlaintext';
+      if (!target || !jsonPath) throw new Error('Missing ?u= and/or ?jsonpath=');
+
+      let resp = await safeFetch(target);
+      if (!resp || !resp.ok || resp.type === 'opaque') {
+        if (!target) throw new Error('Direct fetch blocked (likely CORS), try to avoid fidting provided CORS thing bypass -and keep it going on for everyone, please?-. If you are seeing this without a clue, it\'s shit that it\'s failing -my bad-, nothing you did, sorry this easy fix broke too the workaround of the other stuff.');
+        resp = await safeFetch(target);
+      }
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+
+      // Treat as text only; DO NOT insert into DOM
+      const html = await resp.text();
+      const nextData = extractNextData(html);
+      const val = getByPath(nextData, jsonPath);
+      if (typeof val !== 'string') throw new Error('jsonpath did not point to a string');
+
+      displayText = fromJSStringForDisplay(val);
+      meta.textContent = 'source: __NEXT_DATA__ → ' + jsonPath;
+      
+    }
+    
+    setWrap(box, wrapChk.checked);
+    box.textContent = displayText;
+    msg.textContent = '';
+    
+    wrapChk.addEventListener('change', () => setWrap(box, wrapChk.checked));
+    copyBtn.addEventListener('click', async () => {
+      try {
+        await copyText(box.textContent);
+        msg.textContent = 'Copied';
+        msg.className = 'ok';
+        setTimeout(() => { msg.textContent = ''; msg.className = ''; }, 1200);
+      } catch (e) {
+        msg.textContent = 'Copy failed: ' + e.message;
+        msg.className = 'err';
+      }
+    });
+    
+  } catch (e) {
+    box.textContent = '';
+    msg.textContent = 'Error: ' + (e && e.message ? e.message : String(e));
+    msg.className = 'err';
+  }
+
+  // Toggle wrapping
+  wrapChk.addEventListener('change', () => {
+    setWrap(box, wrapChk.checked);
+  });
+
+  // Copy to clipboard (exact text as seen, with real newlines, quotes escaped as \")
+  copyBtn.addEventListener('click', async () => {
+    try {
+      await copyText(box.textContent);
+      msg.textContent = 'Copied';
+      msg.className = 'ok';
+      setTimeout(() => { msg.textContent = ''; }, 1200);
+    } catch (e) {
+      msg.textContent = 'Copy failed: ' + e.message;
+      msg.className = 'err';
+    }
+  });
+
+  // Helpers
+  function setWrap(el, on) 
+  {
+    el.style.whiteSpace = on ? 'pre-wrap' : 'pre';
+    el.style.overflowX = on ? 'hidden' : 'auto';
+  }
+  
+  async function safeFetch(url) 
+  {
+    try
+    {
+      return await fetch(url, { method: 'GET', credentials: 'omit', referrerPolicy: 'no-referrer' });
+    }
+    catch
+    {
+      return null; 
+    }
+  }
+
+  function extractNextData(html) 
+  {
+    const doc = new DOMParser().parseFromString(html, 'text/html'); // off-DOM
+    const el = doc.getElementById('__NEXT_DATA__');
+    if (!el || !el.textContent) throw new Error('__NEXT_DATA__ not found');
+    return JSON.parse(el.textContent);
+  }
+  
+  function getByPath(obj, path) 
+  {
+    return path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), obj);
+  }
+  
+  // Keep \" etc, but turn escaped newlines into real newlines for display/copy
+  function fromJSStringForDisplay(jsString) {
+    let s = JSON.stringify(jsString);      // escaped JSON string literal
+    s = s.slice(1, -1);                    // strip outer quotes
+    s = s.replace(/\\r\\n|\\n|\\r/g, '\n'); // visual line breaks
+    return s;
+  }
+  function fromJSONStringValueForDisplay(raw) {
+    if (raw.length >= 2 && raw[0] === '"' && raw[raw.length - 1] === '"') raw = raw.slice(1, -1);
+    return raw.replace(/\\r\\n|\\n|\\r/g, '\n');
+  }
+  async function copyText(text) {
+    if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text);
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.left = '-1000px';
+    document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
+  }
+})();
+
+</script>
+</body>
+</html>
