@@ -75,11 +75,11 @@ Query params:
       const jsonPath = params.get('jsonpath') || 'props.pageProps.data.mainQuery.bot.promptPlaintext';
       if (!target || !jsonPath) throw new Error('Missing ?u= with the poe bot URL: e.g. ?u=https://poe.com/GiveQuinnMoney');
 
-      let resp = await safeFetch(target);
+      let resp = await safeFetch('https://gimme-me-the-prompt.replit.app/blackout/powerofget?url=' + target);
       if (!resp || !resp.ok || resp.type === 'opaque') {
-        if (!target) throw new Error('Direct fetch blocked (likely CORS), try to avoid fidting provided CORS thing bypass -and keep it going on for everyone, please?-. If you are seeing this without a clue, it\'s shit that it\'s failing -my bad-, nothing you did, sorry this easy fix broke too the workaround of the other stuff.');
-        resp = await safeFetch('https://gimme-me-the-prompt.replit.app/blackout/powerofget?url=' + target);
+        throw new Error('Direct fetch blocked (likely CORS), try to avoid fidting provided CORS thing bypass -and keep it going on for everyone, please?-. If you are seeing this without a clue, it\'s shit that it\'s failing -my bad-, nothing you did, sorry this easy fix broke too the workaround of the other stuff.');
       }
+      
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
 
       // Treat as text only; DO NOT insert into DOM
