@@ -116,24 +116,6 @@ Query params:
     msg.className = 'err';
   }
 
-  // Toggle wrapping
-  wrapChk.addEventListener('change', () => {
-    setWrap(box, wrapChk.checked);
-  });
-
-  // Copy to clipboard (exact text as seen, with real newlines, quotes escaped as \")
-  copyBtn.addEventListener('click', async () => {
-    try {
-      await copyText(box.textContent);
-      msg.textContent = 'Copied';
-      msg.className = 'ok';
-      setTimeout(() => { msg.textContent = ''; }, 1200);
-    } catch (e) {
-      msg.textContent = 'Copy failed: ' + e.message;
-      msg.className = 'err';
-    }
-  });
-
   // Helpers
   function setWrap(el, on) 
   {
@@ -167,22 +149,17 @@ Query params:
   }
   
   // Keep \" etc, but turn escaped newlines into real newlines for display/copy
-  function fromJSStringForDisplay(jsString) {
-    let s = JSON.stringify(jsString);      // escaped JSON string literal
+  function fromJSStringForDisplay(jsString)
+  {
+    //Leaving in weird case I just need back, but this is a mistake
+    return jsString;
+    
+    /*let s = JSON.stringify(jsString);      // escaped JSON string literal
     s = s.slice(1, -1);                    // strip outer quotes
     s = s.replace(/\\r\\n|\\n|\\r/g, '\n'); // visual line breaks
-    return s;
+    return s;*/
   }
-  function fromJSONStringValueForDisplay(raw) {
-    if (raw.length >= 2 && raw[0] === '"' && raw[raw.length - 1] === '"') raw = raw.slice(1, -1);
-    return raw.replace(/\\r\\n|\\n|\\r/g, '\n');
-  }
-  async function copyText(text) {
-    if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text);
-    const ta = document.createElement('textarea');
-    ta.value = text; ta.style.position = 'fixed'; ta.style.left = '-1000px';
-    document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
-  }
+  
 })();
 
 </script>
